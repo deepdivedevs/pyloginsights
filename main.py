@@ -4,6 +4,8 @@ import time
 import io
 from contextlib import redirect_stdout
 import psutil
+import pandas as pd
+import os
 
 # Database setup
 conn = sqlite3.connect('logs.db')
@@ -44,32 +46,76 @@ def capture(func):
         return result
     return wrapper
 
-# Query function
-def query_logs(start_time=None, end_time=None, function_name=None, stdout=None, min_memory=None, max_memory=None):
+# TODO:
+# Advanced filtering
+#
+def query_logs(filters=None, sort_by=None):
+    conn = sqlite3.connect('logs.db')
+    
     query = "SELECT * FROM logs WHERE 1=1"
     params = []
+
+    if filters:
+        if 'start_time' in filters:
+            query += " AND timestamp >= ?"
+            params.append(filters['start_time'])
+        if 'end_time' in filters:
+            query += " AND timestamp <= ?"
+            params.append(filters['end_time'])
+        if 'function_name' in filters:
+            query += " AND function_name = ?"
+            params.append(filters['function_name'])
+        if 'min_memory' in filters:
+            query += " AND avg_memory >= ?"
+            params.append(filters['min_memory'])
+        if 'max_memory' in filters:
+            query += " AND avg_memory <= ?"
+            params.append(filters['max_memory'])
+        if 'stdout' in filters:
+            query += " AND stdout LIKE ?"
+            params.append(f"%{filters['stdout']}%")
+
+    try:
+        df = pd.read_sql_query(query, conn, params=params)
+        print(f"Query returned {len(df)} rows")
+    except Exception as e:
+        print(f"Error executing query: {e}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+    if sort_by:
+        try:
+            sort_columns = [col for col, _ in sort_by]
+            sort_ascending = [direction == 'asc' for _, direction in sort_by]
+            df = df.sort_values(by=sort_columns, ascending=sort_ascending)
+        except Exception as e:
+            print(f"Error sorting DataFrame: {e}")
+
+    return df
+
+def export_logs(df, file_path, format='csv'):
+    """
+    Export logs to a file in the specified format.
     
-    if start_time:
-        query += " AND timestamp >= ?"
-        params.append(start_time)
-    if end_time:
-        query += " AND timestamp <= ?"
-        params.append(end_time)
-    if function_name:
-        query += " AND function_name = ?"
-        params.append(function_name)
-    if stdout:
-        query += " AND stdout LIKE ?"
-        params.append(f"%{stdout}%") 
-    if min_memory:
-        query += " AND avg_memory >= ?"
-        params.append(min_memory)
-    if max_memory:
-        query += " AND avg_memory <= ?"
-        params.append(max_memory)
-    
-    cursor.execute(query, params)
-    return cursor.fetchall()
+    :param df: pandas DataFrame containing the log data
+    :param file_path: path where the file should be saved
+    :param format: 'csv' or 'json'
+    :return: True if export was successful, False otherwise
+    """
+    try:
+        if format.lower() == 'csv':
+            df.to_csv(file_path, index=False)
+        elif format.lower() == 'json':
+            df.to_json(file_path, orient='records', lines=True)
+        else:
+            raise ValueError(f"Unsupported format: {format}. Use 'csv' or 'json'.")
+        
+        print(f"Logs exported successfully to {file_path}")
+        return True
+    except Exception as e:
+        print(f"Error exporting logs: {e}")
+        return False
 
 # Example usage
 @capture
@@ -87,13 +133,15 @@ def example_function_two(x):
 example_function(1, 2)
 example_function_two(5)
 
-# Query and print logs
-print("All logs:")
-all_logs = query_logs(stdout="processing")
-for log in all_logs:
-    print(f"Timestamp: {log[0]}, Function: {log[1]}, Execution Time: {log[2]:.9f}s")
-    print(f"Avg Memory: {log[3]:.2f} MB")
-    print(f"Stdout: {log[4]}")
+
+logs = query_logs(
+    filters={'stdout': 'testing'},
+    sort_by=[('execution_time', 'desc'), ('function_name', 'asc')]
+)
+print(logs)
+
+csv_path = os.path.join(os.getcwd(), 'logs_export.csv')
+export_logs(logs, csv_path, format='csv')
 
 # Clean up
 conn.close()
